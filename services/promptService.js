@@ -1,22 +1,54 @@
 /**
  * services/promptService.js
  *
- * Builds AI prompts for each social-media platform.
- * The prompts are later sent to the chosen AI provider
- * (OpenRouter or Bedrock) by captionService and imageService.
+ * Builds AI prompts for captions and image processing.
+ * Accepts rich context: vibe, accountType, imageAction, platformContext.
  */
 
-const platformConfig = require("../utils/platformConfig");
+const { platformConfig, vibeModifiers, imageActionPrompts } = require("../utils/platformConfig");
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Caption Prompt Builder
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Build a caption generation prompt for a specific platform.
+ *
+ * @param {string} platform       - "instagram" | "linkedin" | "twitter"
+ * @param {string} content        - User's raw idea / text
+ * @param {object} options
+ * @param {string} options.vibe        - Key from vibeModifiers (e.g. "funny")
+ * @param {string} options.accountType - "personal" | "business"
+ * @param {object} options.context     - Platform-specific context (postType, audience, goal, etc.)
  */
-function buildCaptionPrompt(platform, content) {
+function buildCaptionPrompt(platform, content, options = {}) {
   const config = platformConfig[platform];
+  if (!config) throw new Error(`Unsupported platform: ${platform}`);
 
-  if (!config) {
-    throw new Error(`Unsupported platform: ${platform}`);
+  const { vibe, accountType, context = {} } = options;
+
+  // ── Vibe modifier ──────────────────────────────────────────────────────────
+  const vibeText = vibe && vibeModifiers[vibe]
+    ? `\nTone / Vibe:\n${vibeModifiers[vibe]}`
+    : "";
+
+  // ── Account type modifier ──────────────────────────────────────────────────
+  const accountText = accountType
+    ? `\nAccount type: ${accountType === "business" ? "Business / Brand account — professional and consistent." : "Personal account — authentic and individual."}`
+    : "";
+
+  // ── Platform context modifiers ─────────────────────────────────────────────
+  const contextParts = [];
+  const contextDefs = config.contextPrompts || {};
+
+  for (const [key, value] of Object.entries(context)) {
+    if (contextDefs[key] && contextDefs[key][value]) {
+      contextParts.push(contextDefs[key][value]);
+    }
   }
+  const contextText = contextParts.length
+    ? `\nAdditional context:\n${contextParts.map((c) => `- ${c}`).join("\n")}`
+    : "";
 
   return `
 You are an expert social media copywriter.
@@ -26,6 +58,9 @@ Topic / Idea:
 
 Your task:
 ${config.captionStyle}
+${vibeText}
+${accountText}
+${contextText}
 
 Write a compelling caption optimized for engagement.
 
@@ -34,18 +69,28 @@ No explanations.
 `.trim();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Image Prompt Builder
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
- * Build an image generation prompt optimized for AI image models
- * like Flux or DALL-E.
+ * Build an image generation / editing prompt.
+ *
+ * @param {string} platform    - "instagram" | "linkedin" | "twitter"
+ * @param {string} content     - User's raw idea / text
+ * @param {string} imageAction - Key from imageActionPrompts
+ * @returns {string|null} Prompt string, or null if action is "keep_original"
  */
-function buildImagePrompt(platform, content) {
+function buildImagePrompt(platform, content, imageAction = "generate_new") {
   const config = platformConfig[platform];
+  if (!config) throw new Error(`Unsupported platform: ${platform}`);
 
-  if (!config) {
-    throw new Error(`Unsupported platform: ${platform}`);
-  }
+  // keep_original means no AI image processing
+  const actionInstruction = imageActionPrompts[imageAction];
+  if (actionInstruction === null) return null;
 
-  // Base visual style for all platforms
+  const action = actionInstruction || imageActionPrompts.generate_new;
+
   const baseVisualStyle = `
 modern social media marketing poster,
 clean minimal startup aesthetic,
@@ -54,46 +99,28 @@ futuristic tech elements,
 high quality digital design,
 bold typography space,
 professional marketing graphic
-`;
+`.trim();
 
-  // Platform-specific composition
   const platformVisualStyles = {
-    instagram: `
-square composition,
-visually engaging layout,
-vibrant colors,
-attention grabbing design
-`,
-    linkedin: `
-professional corporate visual,
-clean business aesthetic,
-modern tech startup branding
-`,
-    twitter: `
-wide banner style composition,
-dynamic layout,
-bold tech themed visuals
-`,
+    instagram: "square composition, vibrant colors, visually engaging layout, attention grabbing design",
+    linkedin: "professional corporate visual, clean business aesthetic, modern tech startup branding, landscape 1200x627",
+    twitter: "wide banner 16:9, dynamic layout, bold tech themed visuals, high contrast",
   };
 
   const platformStyle = platformVisualStyles[platform] || "";
 
   return `
-Create a high-quality social media marketing image.
+Action: ${action}
 
-Topic:
-"${content}"
+Topic: "${content}"
 
-Design style:
-${baseVisualStyle}
+Base visual style: ${baseVisualStyle}
 
-Platform style:
-${platformStyle}
+Platform style: ${platformStyle}
 
-Additional requirements:
-${config.imageStyle}
+Additional requirements: ${config.imageStyle}
 
-The image should look like a polished marketing graphic for a tech startup.
+CRITICAL: Preserve the authenticity of the original image. Do not change the subject, location, ethnicity, or core composition unless explicitly instructed by the action above.
 `.trim();
 }
 
