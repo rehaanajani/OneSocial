@@ -78,9 +78,8 @@ app.get("/health", (_req, res) => {
 });
 
 // Apply rate limiter only to the generate endpoint (not health checks)
-// Note: In Vercel, if this file is in the `/api` folder, the incoming route is just `/generate`
-app.use("/api/generate", rateLimiter, generateRoute); // For local dev
-app.use("/generate", rateLimiter, generateRoute);     // For Vercel Serverless
+// Note: In Vercel, api/generate.js handles `/api/generate`, so the internal path is just `/`
+app.use("/", rateLimiter, generateRoute);
 
 // ── 404 Handler ───────────────────────────────────────────────────────────
 
