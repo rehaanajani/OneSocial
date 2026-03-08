@@ -12,6 +12,7 @@
 const {
     BedrockRuntimeClient,
     InvokeModelCommand,
+    ConverseCommand,
 } = require('@aws-sdk/client-bedrock-runtime');
 
 // ── Bedrock client ────────────────────────────────────────────────────────────
@@ -35,28 +36,34 @@ const NOVA_CANVAS_SIZES = {
     x: { width: 1280, height: 720 },  // 16:9 wide banner
 };
 
-// ── Helper: invoke any Claude model ──────────────────────────────────────────
-async function invokeClaude(modelId, systemPrompt, userContent, opts = {}) {
-    const requestBody = {
-        anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: opts.max_tokens || 1024,
-        temperature: opts.temperature || 0.7,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userContent }],
-    };
+// ── Helper: invoke any Model using Converse API ──────────────────────────────
+async function invokeConverse(modelId, systemPrompt, userContentArray, opts = {}) {
+    // Map existing Claude-style array to Converse API format
+    const content = userContentArray.map(item => {
+        if (item.type === 'image') {
+            const format = item.source.media_type.split('/')[1] || 'jpeg';
+            return {
+                image: {
+                    format: format,
+                    source: { bytes: Buffer.from(item.source.data, 'base64') }
+                }
+            };
+        }
+        return { text: item.text };
+    });
 
-    const command = new InvokeModelCommand({
+    const command = new ConverseCommand({
         modelId,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify(requestBody),
+        system: systemPrompt ? [{ text: systemPrompt }] : undefined,
+        messages: [{ role: 'user', content }],
+        inferenceConfig: {
+            maxTokens: opts.max_tokens || 1024,
+            temperature: opts.temperature || 0.7,
+        }
     });
 
     const response = await bedrockClient.send(command);
-    const body = JSON.parse(Buffer.from(response.body).toString('utf-8'));
-    const text = body?.content?.[0]?.text;
-    if (!text) throw new Error(`Claude (${modelId}) returned an empty response.`);
-    return text;
+    return response.output.message.content[0].text;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,7 +123,7 @@ async function generateAnalysis(content, primaryImageB64 = null, userNiche = '')
         ].filter(Boolean).join('\n\n'),
     });
 
-    const raw = await invokeClaude(ANALYSIS_MODEL, ANALYST_SYSTEM_PROMPT, userContent, {
+    const raw = await invokeConverse(ANALYSIS_MODEL, ANALYST_SYSTEM_PROMPT, userContent, {
         max_tokens: 800,
         temperature: 0.3,
     });
@@ -137,7 +144,7 @@ async function generateAnalysis(content, primaryImageB64 = null, userNiche = '')
  * @returns {Promise<string>} Caption text
  */
 async function generateCaption(prompt) {
-    const text = await invokeClaude(CAPTION_MODEL, '', [{ type: 'text', text: prompt }], {
+    const text = await invokeConverse(CAPTION_MODEL, '', [{ type: 'text', text: prompt }], {
         max_tokens: 512,
         temperature: 0.75,
     });
