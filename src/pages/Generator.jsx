@@ -6,7 +6,9 @@ import PlatformSelector from "../components/PlatformSelector";
 import GenerateButton from "../components/GenerateButton";
 import ResultsPage from "./ResultsPage";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
+// Use the environment variable if present (like for local dev), 
+// otherwise use an empty string so fetch paths are relative to the current domain (e.g., Vercel)
+const API_BASE = import.meta.env.VITE_API_URL || "";
 
 function fileToBase64(file) {
     return new Promise((resolve, reject) => {
