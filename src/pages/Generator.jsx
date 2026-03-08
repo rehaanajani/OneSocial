@@ -1,194 +1,202 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
+import Navbar from "../components/Navbar";
 import ContentInput from "../components/ContentInput";
 import PlatformSelector from "../components/PlatformSelector";
 import GenerateButton from "../components/GenerateButton";
 import ResultsPage from "./ResultsPage";
 
-// ── Progress steps shown during generation ────────────────────────────────
-const PROGRESS_STEPS = [
-    { id: "analyzing", label: "Analyzing image…", icon: "🔍" },
-    { id: "prompting", label: "Engineering prompts…", icon: "✍️" },
-    { id: "generating", label: "Generating visuals…", icon: "🎨" },
-    { id: "captioning", label: "Writing captions…", icon: "📝" },
-    { id: "done", label: "Almost ready!", icon: "✨" },
-];
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-// ── Convert a blob URL to base64 string ──────────────────────────────────
-async function blobUrlToBase64(blobUrl) {
-    try {
-        const response = await fetch(blobUrl);
-        const blob = await response.blob();
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    } catch {
-        return null;
-    }
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const base64 = reader.result.split(",")[1];
+            resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
 }
 
 export default function Generator() {
-    // ── View state ─────────────────────────────────────────────────────────
-    const [view, setView] = useState("editor"); // "editor" | "results"
-
-    // ── Caption state ──────────────────────────────────────────────────────
+    // ── Content State ───────────────────────────────────────────────────────
     const [content, setContent] = useState("");
+    const [images, setImages] = useState([]);
+    const [primaryImageIndex, setPrimaryImageIndex] = useState(null);
     const [captionVibe, setCaptionVibe] = useState("");
     const [accountType, setAccountType] = useState("personal");
     const [manualCaption, setManualCaption] = useState("");
+    const [imageAction, setImageAction] = useState("generate_new");
     const [writeOwn, setWriteOwn] = useState(false);
 
-    // ── Image state ────────────────────────────────────────────────────────
-    const [images, setImages] = useState([]);
-    const [primaryImageIndex, setPrimaryImageIndex] = useState(null);
-    const [imageAction, setImageAction] = useState("generate_new");
+    // ── New AI Pipeline Preferences ─────────────────────────────────────────
+    const [contentNiche, setContentNiche] = useState("");
+    const [imageStyle, setImageStyle] = useState("auto");
+    const [colorPalette, setColorPalette] = useState("auto");
 
-    // ── Platform state ─────────────────────────────────────────────────────
-    const [selectedPlatforms, setSelectedPlatforms] = useState([]);
+    // ── Platform State ──────────────────────────────────────────────────────
+    const [selectedPlatforms, setSelectedPlatforms] = useState(["instagram"]);
     const [platformContexts, setPlatformContexts] = useState({});
 
-    // ── Results & UI state ─────────────────────────────────────────────────
-    const [results, setResults] = useState(null);
-    const [originalImage, setOriginalImage] = useState(null);
+    // ── Generation State ────────────────────────────────────────────────────
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState("");
+    const [generationStage, setGenerationStage] = useState(null); // null | "analysing" | "crafting" | "generating"
+    const [results, setResults] = useState(null);
     const [warnings, setWarnings] = useState([]);
-    const [currentStep, setCurrentStep] = useState(0);
+    const [error, setError] = useState("");
 
-    const canGenerate = (content.trim() || manualCaption.trim()) && selectedPlatforms.length > 0;
+    // ── Validation ──────────────────────────────────────────────────────────
+    const hasContent = content.trim().length > 0 || manualCaption.trim().length > 0;
+    const hasPlatforms = selectedPlatforms.length > 0;
+    const canGenerate = hasContent && hasPlatforms && !loading;
 
-    const advanceStep = (() => {
-        let timers = [];
-        return {
-            start() {
-                setCurrentStep(0);
-                const delays = [700, 1800, 3200, 5000];
-                timers = delays.map((delay, i) =>
-                    setTimeout(() => setCurrentStep(i + 1), delay)
-                );
-            },
-            stop() {
-                timers.forEach(clearTimeout);
-                timers = [];
-            },
-        };
-    })();
-
+    // ── Handle Generate ─────────────────────────────────────────────────────
     const handleGenerate = async () => {
-        if (!canGenerate) {
-            setError("Please enter some content and select at least one platform.");
-            return;
-        }
-        setError("");
-        setWarnings([]);
-        setLoading(true);
-        setResults(null);
-        advanceStep.start();
+        if (!canGenerate) return;
 
-        let primaryImageBase64 = null;
-        if (images.length > 0 && primaryImageIndex !== null) {
-            const blobUrl = images[primaryImageIndex]?.preview;
-            if (blobUrl) {
-                primaryImageBase64 = await blobUrlToBase64(blobUrl);
-                setOriginalImage(primaryImageBase64);
-            }
-        }
+        setLoading(true);
+        setError("");
+        setResults(null);
+        setWarnings([]);
 
         try {
-            const response = await fetch("/api/generate", {
+            // Stage indicator — Analysing
+            setGenerationStage("analysing");
+
+            let primaryImageBase64 = null;
+            if (primaryImageIndex !== null && images[primaryImageIndex]) {
+                primaryImageBase64 = await fileToBase64(images[primaryImageIndex].file);
+            }
+
+            // Small UI pause so user sees the "Analysing" stage label
+            await new Promise((r) => setTimeout(r, 500));
+            setGenerationStage("crafting");
+
+            const payload = {
+                content: content.trim(),
+                platforms: selectedPlatforms,
+                captionVibe,
+                accountType,
+                manualCaption: writeOwn ? manualCaption.trim() : "",
+                imageAction,
+                primaryImage: primaryImageBase64,
+                platformContexts,
+                // New pipeline fields
+                contentNiche,
+                imageStyle,
+                colorPalette,
+            };
+
+            // Short pause so user sees the "Crafting" label before the real request fires
+            await new Promise((r) => setTimeout(r, 400));
+            setGenerationStage("generating");
+
+            const res = await fetch(`${API_BASE}/api/generate`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    content,
-                    platforms: selectedPlatforms,
-                    captionVibe,
-                    accountType,
-                    manualCaption,
-                    imageAction,
-                    primaryImage: primaryImageBase64,
-                    platformContexts,
-                }),
+                body: JSON.stringify(payload),
             });
 
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || "Failed to generate posts");
+            const data = await res.json();
+
+            if (!res.ok) {
+                setError(data.message || "Something went wrong. Please try again.");
+                return;
             }
 
-            const data = await response.json();
-
-            if (data._warnings) {
-                setWarnings(data._warnings);
-                delete data._warnings;
-            }
-
-            setCurrentStep(PROGRESS_STEPS.length - 1);
-            setResults(data);
-
-            setTimeout(() => {
-                advanceStep.stop();
-                setLoading(false);
-                setView("results");
-            }, 600);
-
+            const { _warnings = [], ...platformResults } = data;
+            setWarnings(_warnings);
+            setResults(platformResults);
         } catch (err) {
-            console.error(err);
-            advanceStep.stop();
+            console.error("[Generator] fetch error:", err);
+            setError("Could not reach the server. Is the backend running?");
+        } finally {
             setLoading(false);
-            setError("Failed to generate posts. Please try again.");
+            setGenerationStage(null);
         }
     };
 
-    // ── Results page ───────────────────────────────────────────────────────
-    if (view === "results" && results) {
+    const primaryImagePreview =
+        primaryImageIndex !== null && images[primaryImageIndex]
+            ? images[primaryImageIndex].preview
+            : null;
+
+    // ── Results view ──────────────────────────────────────────────────────
+    if (results) {
         return (
             <motion.div
-                className="absolute top-0 left-0 w-full min-h-screen pt-20 bg-bg"
+                className="absolute top-0 left-0 w-full min-h-screen bg-bg"
                 initial={{ opacity: 0, filter: "blur(10px)" }}
                 animate={{ opacity: 1, filter: "blur(0px)" }}
                 exit={{ opacity: 0, filter: "blur(10px)" }}
                 transition={{ duration: 0.4, ease: "easeInOut" }}
             >
+                <Navbar />
                 <ResultsPage
                     results={results}
-                    originalImage={originalImage}
+                    originalImage={primaryImagePreview}
                     imageAction={imageAction}
                     warnings={warnings}
-                    onBack={() => setView("editor")}
+                    onBack={() => setResults(null)}
                 />
             </motion.div>
         );
     }
 
-    // ── Editor page ────────────────────────────────────────────────────────
+    // ── Input Form view ────────────────────────────────────────────────────
     return (
         <motion.div
-            className="absolute top-0 left-0 w-full min-h-screen pt-24 pb-12 bg-bg"
+            className="absolute top-0 left-0 w-full min-h-screen bg-bg"
             initial={{ opacity: 0, filter: "blur(10px)" }}
             animate={{ opacity: 1, filter: "blur(0px)" }}
             exit={{ opacity: 0, filter: "blur(10px)" }}
             transition={{ duration: 0.4, ease: "easeInOut" }}
         >
-            <section className="max-w-4xl mx-auto px-4 sm:px-6 space-y-6">
-                <div>
-                    <h1 className="text-3xl font-extrabold text-white mb-2" style={{ fontFamily: "'Syne', sans-serif" }}>Create Campaign</h1>
-                    <p className="text-text-muted">Configure your primary content style and pick destination platforms to auto-generate posts.</p>
+            <Navbar />
+
+            <main className="max-w-3xl mx-auto px-4 sm:px-6 py-10 space-y-8">
+                {/* Page heading */}
+                <div className="text-center">
+                    <h2
+                        className="text-2xl sm:text-3xl font-extrabold text-text tracking-tight mb-2"
+                        style={{ fontFamily: "'Syne', sans-serif" }}
+                    >
+                        Create Your Posts
+                    </h2>
+                    <p className="text-sm text-text-muted">
+                        One idea → platform-optimised captions & visuals, instantly.
+                    </p>
                 </div>
 
+                {/* Content input card */}
                 <ContentInput
-                    content={content} setContent={setContent}
-                    images={images} setImages={setImages}
-                    primaryImageIndex={primaryImageIndex} setPrimaryImageIndex={setPrimaryImageIndex}
-                    captionVibe={captionVibe} setCaptionVibe={setCaptionVibe}
-                    accountType={accountType} setAccountType={setAccountType}
-                    manualCaption={manualCaption} setManualCaption={setManualCaption}
-                    imageAction={imageAction} setImageAction={setImageAction}
-                    writeOwn={writeOwn} setWriteOwn={setWriteOwn}
+                    content={content}
+                    setContent={setContent}
+                    images={images}
+                    setImages={setImages}
+                    primaryImageIndex={primaryImageIndex}
+                    setPrimaryImageIndex={setPrimaryImageIndex}
+                    captionVibe={captionVibe}
+                    setCaptionVibe={setCaptionVibe}
+                    accountType={accountType}
+                    setAccountType={setAccountType}
+                    manualCaption={manualCaption}
+                    setManualCaption={setManualCaption}
+                    imageAction={imageAction}
+                    setImageAction={setImageAction}
+                    writeOwn={writeOwn}
+                    setWriteOwn={setWriteOwn}
+                    contentNiche={contentNiche}
+                    setContentNiche={setContentNiche}
+                    imageStyle={imageStyle}
+                    setImageStyle={setImageStyle}
+                    colorPalette={colorPalette}
+                    setColorPalette={setColorPalette}
                 />
 
+                {/* Platform selector */}
                 <PlatformSelector
                     selectedPlatforms={selectedPlatforms}
                     setSelectedPlatforms={setSelectedPlatforms}
@@ -196,52 +204,29 @@ export default function Generator() {
                     setPlatformContexts={setPlatformContexts}
                 />
 
-                {/* Error */}
+                {/* Error message */}
                 {error && (
-                    <div className="flex items-center gap-3 bg-error/10 border border-error/20 text-error rounded-xl px-5 py-3 text-sm font-medium">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                        </svg>
-                        {error}
+                    <div className="flex items-start gap-3 bg-error/10 border border-error/20 text-red-400 rounded-xl px-4 py-3 text-sm">
+                        <span className="text-base shrink-0">⚠️</span>
+                        <span>{error}</span>
                     </div>
                 )}
 
-                <GenerateButton onClick={handleGenerate} loading={loading} disabled={!canGenerate} />
-
-                {/* ── Progress Stepper ────────────────────────────────────── */}
-                {loading && (
-                    <div className="flex flex-col items-center gap-6 py-10">
-                        {/* Animated ring */}
-                        <div className="relative w-16 h-16">
-                            <div className="absolute inset-0 rounded-full border-4 border-surface-lighter" />
-                            <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin" />
-                            <div className="absolute inset-0 flex items-center justify-center text-xl">
-                                {PROGRESS_STEPS[Math.min(currentStep, PROGRESS_STEPS.length - 1)].icon}
-                            </div>
-                        </div>
-
-                        {/* Step labels */}
-                        <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-center">
-                            {PROGRESS_STEPS.map((step, i) => (
-                                <div key={step.id} className="flex items-center gap-1 sm:gap-2">
-                                    <span
-                                        className={`text-xs font-semibold transition-all duration-500
-                                            ${i < currentStep ? "text-success line-through opacity-50" : ""}
-                                            ${i === currentStep ? "text-primary" : ""}
-                                            ${i > currentStep ? "text-text-muted/40" : ""}
-                                        `}
-                                    >
-                                        {step.label}
-                                    </span>
-                                    {i < PROGRESS_STEPS.length - 1 && (
-                                        <span className={`text-xs transition-colors duration-500 ${i < currentStep ? "text-success" : "text-border"}`}>→</span>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                {/* Disabled hint */}
+                {!hasContent && !loading && (
+                    <p className="text-center text-xs text-text-muted">
+                        Enter an idea or topic above to get started.
+                    </p>
                 )}
-            </section>
+
+                {/* Generate button */}
+                <GenerateButton
+                    onClick={handleGenerate}
+                    loading={loading}
+                    disabled={!canGenerate}
+                    stage={generationStage}
+                />
+            </main>
         </motion.div>
     );
 }

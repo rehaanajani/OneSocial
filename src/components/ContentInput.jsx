@@ -12,6 +12,45 @@ const CAPTION_VIBES = [
     { id: "bold", label: "🎭 Bold & Edgy", desc: "Provocative & high contrast" },
 ];
 
+// ── Content Niches ────────────────────────────────────────────────────────
+const CONTENT_NICHES = [
+    { id: "technology", label: "💻 Tech" },
+    { id: "food", label: "🍕 Food" },
+    { id: "fitness", label: "🏋️ Fitness" },
+    { id: "travel", label: "✈️ Travel" },
+    { id: "fashion", label: "👗 Fashion" },
+    { id: "business", label: "💼 Business" },
+    { id: "gaming", label: "🎮 Gaming" },
+    { id: "education", label: "🎓 Education" },
+    { id: "art", label: "🎨 Art" },
+    { id: "music", label: "🎵 Music" },
+    { id: "lifestyle", label: "🌿 Lifestyle" },
+    { id: "other", label: "✦ Other" },
+];
+
+// ── Visual Styles ─────────────────────────────────────────────────────────
+const VISUAL_STYLES = [
+    { id: "auto", label: "✦ Auto", desc: "AI decides based on content" },
+    { id: "cinematic", label: "🎬 Cinematic", desc: "Film-grade, dramatic lighting" },
+    { id: "minimal", label: "◻ Minimal", desc: "Clean, white-space, studio" },
+    { id: "vibrant", label: "🌈 Vibrant", desc: "Bold colours, high saturation" },
+    { id: "dark_moody", label: "🌑 Dark & Moody", desc: "Deep shadows, rich contrast" },
+    { id: "illustration", label: "🖼 Illustration", desc: "Flat vector, editorial design" },
+    { id: "photorealistic", label: "📷 Photorealistic", desc: "DSLR-quality, natural light" },
+    { id: "neon_glow", label: "⚡ Neon Glow", desc: "Cyberpunk, electric vibes" },
+];
+
+// ── Color Palettes ────────────────────────────────────────────────────────
+const COLOR_PALETTES = [
+    { id: "auto", label: "✦ Auto" },
+    { id: "warm", label: "🟠 Warm" },
+    { id: "cool", label: "🔵 Cool" },
+    { id: "monochrome", label: "⚫ Mono" },
+    { id: "pastel", label: "🌸 Pastel" },
+    { id: "earth", label: "🤎 Earth" },
+    { id: "neon", label: "🟢 Neon" },
+];
+
 // ── Image Actions ─────────────────────────────────────────────────────────
 const IMAGE_ACTIONS = [
     { id: "generate_new", label: "✨ Generate New", desc: "Create image from scratch" },
@@ -33,13 +72,16 @@ export default function ContentInput({
     manualCaption, setManualCaption,
     imageAction, setImageAction,
     writeOwn, setWriteOwn,
+    contentNiche, setContentNiche,
+    imageStyle, setImageStyle,
+    colorPalette, setColorPalette,
 }) {
     const maxLength = 2000;
     const charCount = content.length;
     const isNearLimit = charCount > maxLength * 0.9;
     const isOverLimit = charCount > maxLength;
     const fileInputRef = useRef(null);
-    const [activeTab, setActiveTab] = useState("caption"); // "caption" | "image"
+    const [activeTab, setActiveTab] = useState("caption");
 
     const handleImageUpload = (e) => {
         const files = Array.from(e.target.files);
@@ -84,11 +126,8 @@ export default function ContentInput({
     const toggleWriteOwn = () => {
         const next = !writeOwn;
         setWriteOwn(next);
-        if (next) {
-            setManualCaption(content);
-        } else {
-            setManualCaption("");
-        }
+        if (next) setManualCaption(content);
+        else setManualCaption("");
     };
 
     return (
@@ -112,7 +151,8 @@ export default function ContentInput({
 
             {/* ── CAPTION STUDIO ─────────────────────────────────────────────── */}
             {activeTab === "caption" && (
-                <div className="p-6 space-y-5">
+                <div className="p-6 space-y-6">
+                    {/* Idea / content input */}
                     <div>
                         <label className="block text-sm font-semibold text-text mb-1">
                             {writeOwn ? "Your Caption" : "Your Idea or Content"}
@@ -135,7 +175,9 @@ export default function ContentInput({
                                     ? "Write your caption here — this will be used exactly as typed."
                                     : "e.g. Launching our new product tomorrow — a productivity app for remote teams..."}
                                 rows={5}
-                                className={`w-full bg-black/40 border rounded-xl p-5 text-sm text-text placeholder:text-text-muted/40 resize-none outline-none transition-all duration-300 ${writeOwn ? "border-primary/50 focus:border-primary ring-2 ring-primary/20 shadow-[0_0_15px_rgba(0,212,255,0.1)]" : "border-white/10 focus:border-primary focus:ring-2 focus:ring-primary/30"
+                                className={`w-full bg-black/40 border rounded-xl p-5 text-sm text-text placeholder:text-text-muted/40 resize-none outline-none transition-all duration-300 ${writeOwn
+                                    ? "border-primary/50 focus:border-primary ring-2 ring-primary/20 shadow-[0_0_15px_rgba(0,212,255,0.1)]"
+                                    : "border-white/10 focus:border-primary focus:ring-2 focus:ring-primary/30"
                                     }`}
                             />
                             <div className={`absolute bottom-3 right-3 text-xs font-mono ${isOverLimit ? "text-error" : isNearLimit ? "text-amber-400" : "text-text-muted/50"}`}>
@@ -160,7 +202,30 @@ export default function ContentInput({
 
                     {!writeOwn && (
                         <>
-                            {/* Vibe selector */}
+                            {/* Content Niche — NEW */}
+                            <div>
+                                <label className="block text-xs font-semibold text-text-muted mb-3 uppercase tracking-widest">
+                                    Content Niche
+                                    <span className="ml-2 normal-case text-text-muted/50 font-normal">Helps AI understand your world</span>
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {CONTENT_NICHES.map((n) => (
+                                        <button
+                                            key={n.id}
+                                            onClick={() => setContentNiche(contentNiche === n.id ? "" : n.id)}
+                                            className={`px-3 py-2 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer border whitespace-nowrap
+                                                ${contentNiche === n.id
+                                                    ? "bg-primary/15 border-primary/60 text-primary"
+                                                    : "bg-bg border-border text-text-muted hover:border-primary/30 hover:text-text"
+                                                }`}
+                                        >
+                                            {n.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Caption Vibe */}
                             <div>
                                 <label className="block text-xs font-semibold text-text-muted mb-3 uppercase tracking-widest">Caption Vibe</label>
                                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -208,8 +273,8 @@ export default function ContentInput({
 
             {/* ── IMAGE STUDIO ───────────────────────────────────────────────── */}
             {activeTab === "image" && (
-                <div className="p-6 space-y-5">
-                    {/* Image Action pills */}
+                <div className="p-6 space-y-6">
+                    {/* Image Action */}
                     <div>
                         <label className="block text-xs font-semibold text-text-muted mb-3 uppercase tracking-widest">What to do with the image</label>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -230,6 +295,57 @@ export default function ContentInput({
                             ))}
                         </div>
                     </div>
+
+                    {/* Visual Style — NEW */}
+                    {imageAction !== "keep_original" && (
+                        <>
+                            <div>
+                                <label className="block text-xs font-semibold text-text-muted mb-3 uppercase tracking-widest">
+                                    Visual Style
+                                    <span className="ml-2 normal-case text-text-muted/50 font-normal">Sets the aesthetic of generated images</span>
+                                </label>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                    {VISUAL_STYLES.map((s) => (
+                                        <button
+                                            key={s.id}
+                                            onClick={() => setImageStyle(imageStyle === s.id ? "auto" : s.id)}
+                                            title={s.desc}
+                                            className={`px-3 py-2.5 rounded-xl text-xs font-semibold text-left transition-all duration-200 cursor-pointer border
+                                                ${imageStyle === s.id
+                                                    ? "bg-primary/15 border-primary/60 text-primary"
+                                                    : "bg-bg border-border text-text-muted hover:border-primary/30 hover:text-text"
+                                                }`}
+                                        >
+                                            <div>{s.label}</div>
+                                            <div className="text-[10px] opacity-60 mt-0.5 font-normal">{s.desc}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Color Palette — NEW */}
+                            <div>
+                                <label className="block text-xs font-semibold text-text-muted mb-3 uppercase tracking-widest">
+                                    Color Palette
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {COLOR_PALETTES.map((c) => (
+                                        <button
+                                            key={c.id}
+                                            onClick={() => setColorPalette(colorPalette === c.id ? "auto" : c.id)}
+                                            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer border whitespace-nowrap
+                                                ${colorPalette === c.id
+                                                    ? "bg-primary/15 border-primary/60 text-primary"
+                                                    : "bg-bg border-border text-text-muted hover:border-primary/30 hover:text-text"
+                                                }`}
+                                        >
+                                            {c.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </>
+                    )}
 
                     {/* Upload zone */}
                     <div>

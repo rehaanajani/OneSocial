@@ -3,15 +3,17 @@
  *
  * POST /api/generate
  *
- * Key improvements:
- *  - Sequential per platform: image generated first, caption after (can reference image)
- *  - Partial success: Promise.allSettled means one platform failing won't kill others
- *  - Per-platform sizing hint passed to imageService
+ * Smart 3-stage AI pipeline:
+ *   Stage 1 — ANALYSE: Vision AI understands content + image
+ *   Stage 2 — ENGINEER: Local prompt builder crafts platform-specific prompts
+ *   Stage 3 — GENERATE: Parallel caption + image generation per platform
  */
 
 const express = require('express');
 const router = express.Router();
 
+const { analyse } = require('../services/analysisService');
+const { buildPrompts } = require('../services/promptEngineerService');
 const { generateCaption } = require('../services/captionService');
 const { generateImage } = require('../services/imageService');
 
@@ -26,8 +28,11 @@ router.post('/', async (req, res) => {
             accountType = 'personal',
             manualCaption = '',
             imageAction = 'generate_new',
-            primaryImage = null,   // base64 string from frontend
+            primaryImage = null,      // base64 string from frontend
             platformContexts = {},
+            imageStyle = 'auto',      // new: visual aesthetic preference
+            colorPalette = 'auto',    // new: color palette preference
+            contentNiche = '',        // new: content niche hint
         } = req.body;
 
         // ── 1. Validate ──────────────────────────────────────────────────────
@@ -61,28 +66,52 @@ router.post('/', async (req, res) => {
         const normalisedPlatforms = platforms.map((p) => p.toLowerCase());
 
         console.log(
-            `[generate] platforms=${normalisedPlatforms.join(',')} | action=${imageAction} | vibe=${captionVibe} | manual=${hasManualCaption}`
+            `[generate] platforms=${normalisedPlatforms.join(',')} | action=${imageAction} | vibe=${captionVibe} | niche=${contentNiche} | style=${imageStyle}`
         );
 
-        // ── 2. Generate per platform — SEQUENTIAL within each platform ────────
-        // Image → Caption (caption can reference the image concept)
-        // Platforms run concurrently with each other via Promise.allSettled
-        // so one platform failing never kills the others (partial success).
+        // ── 2. STAGE 1 — Content Analysis ────────────────────────────────────
+        // Skip analysis if user is writing their own caption AND keeping original image
+        const skipAnalysis = hasManualCaption && imageAction === 'keep_original';
+        let analysis = null;
+
+        if (!skipAnalysis) {
+            console.log('[generate] Stage 1: Analysing content...');
+            analysis = await analyse(content, primaryImage, contentNiche);
+        }
+
+        // ── 3. STAGE 2 — Prompt Engineering ──────────────────────────────────
+        let engineeredPrompts = null;
+
+        if (analysis) {
+            console.log('[generate] Stage 2: Engineering prompts...');
+            const userPrefs = { vibe: captionVibe, accountType, imageStyle, colorPalette, imageAction };
+            engineeredPrompts = buildPrompts(analysis, userPrefs, normalisedPlatforms, platformContexts);
+        }
+
+        // ── 4. STAGE 3 — Generate per platform ───────────────────────────────
+        console.log('[generate] Stage 3: Generating content...');
+
         const platformSettled = await Promise.allSettled(
             normalisedPlatforms.map(async (platform) => {
-                // Step A: Generate image first
+                // Get engineered prompts for this platform (if available)
+                const platformPrompts = engineeredPrompts?.perPlatform?.[platform] || {};
+
+                // Image generation — use engineered image prompt if available
                 const image = await generateImage(
                     platform,
                     content,
                     imageAction,
-                    primaryImage || null
+                    primaryImage || null,
+                    platformPrompts.imagePrompt || null   // ← engineered prompt
                 );
 
-                // Step B: Generate caption AFTER image (can conceptually reference result)
+                // Caption generation — use engineered caption prompt if available
+                // If user wrote their own, manualCaption is used directly in captionService
                 const captionOptions = {
                     vibe: captionVibe,
-                    accountType: accountType,
+                    accountType,
                     context: platformContexts[platform] || {},
+                    engineeredPrompt: platformPrompts.captionPrompt || null,  // ← engineered prompt
                 };
                 const caption = await generateCaption(
                     platform,
@@ -95,7 +124,7 @@ router.post('/', async (req, res) => {
             })
         );
 
-        // ── 3. Separate successes from failures ───────────────────────────────
+        // ── 5. Separate successes from failures ───────────────────────────────
         const response = {};
         const failures = [];
 
@@ -110,7 +139,6 @@ router.post('/', async (req, res) => {
             }
         });
 
-        // If everything failed return 500
         if (Object.keys(response).length === 0) {
             return res.status(500).json({
                 error: 'Generation Failed',
@@ -119,7 +147,6 @@ router.post('/', async (req, res) => {
             });
         }
 
-        // Partial success: return what worked + note what failed
         return res.status(200).json({
             ...response,
             ...(failures.length > 0 ? { _warnings: failures } : {}),

@@ -1,11 +1,12 @@
 /**
  * providers/bedrockProvider.js
  *
- * Wraps the Amazon Bedrock Runtime API for:
- *   - generateCaption(prompt) – using Anthropic Claude
- *   - generateImage(prompt)   – using Stability AI (SDXL)
+ * AWS Bedrock provider for OneSocial.
  *
- * AWS SDK v3 docs: https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/client/bedrock-runtime/
+ * Models used:
+ *   Analysis : anthropic.claude-3-5-sonnet-20241022-v2:0  (vision-capable)
+ *   Caption  : anthropic.claude-3-5-haiku-20241022-v1:0   (fast + high quality)
+ *   Image    : amazon.nova-canvas-v1:0                     (AWS native image gen)
  */
 
 const {
@@ -13,7 +14,7 @@ const {
     InvokeModelCommand,
 } = require('@aws-sdk/client-bedrock-runtime');
 
-// Initialise the Bedrock client once (uses env vars automatically)
+// ── Bedrock client ────────────────────────────────────────────────────────────
 const bedrockClient = new BedrockRuntimeClient({
     region: process.env.AWS_REGION || 'us-east-1',
     credentials: {
@@ -22,27 +23,26 @@ const bedrockClient = new BedrockRuntimeClient({
     },
 });
 
-/**
- * Generate a caption using Anthropic Claude on Amazon Bedrock.
- *
- * @param {string} prompt - The fully-formed caption prompt
- * @returns {Promise<string>} Generated caption text
- */
-async function generateCaption(prompt) {
-    const modelId =
-        process.env.BEDROCK_CAPTION_MODEL_ID ||
-        'anthropic.claude-3-sonnet-20240229-v1:0';
+// ── Model IDs ─────────────────────────────────────────────────────────────────
+const ANALYSIS_MODEL = process.env.BEDROCK_ANALYSIS_MODEL || 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+const CAPTION_MODEL = process.env.BEDROCK_CAPTION_MODEL || 'anthropic.claude-3-5-haiku-20241022-v1:0';
+const IMAGE_MODEL = process.env.BEDROCK_IMAGE_MODEL || 'amazon.nova-canvas-v1:0';
 
-    // Claude Messages API body format
+// ── Nova Canvas supported sizes (platform → dimensions) ──────────────────────
+const NOVA_CANVAS_SIZES = {
+    instagram: { width: 1024, height: 1024 },  // 1:1 square
+    linkedin: { width: 1280, height: 720 },  // 16:9 landscape
+    x: { width: 1280, height: 720 },  // 16:9 wide banner
+};
+
+// ── Helper: invoke any Claude model ──────────────────────────────────────────
+async function invokeClaude(modelId, systemPrompt, userContent, opts = {}) {
     const requestBody = {
         anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: 1024,
-        messages: [
-            {
-                role: 'user',
-                content: prompt,
-            },
-        ],
+        max_tokens: opts.max_tokens || 1024,
+        temperature: opts.temperature || 0.7,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userContent }],
     };
 
     const command = new InvokeModelCommand({
@@ -53,65 +53,166 @@ async function generateCaption(prompt) {
     });
 
     const response = await bedrockClient.send(command);
-
-    // The response body is a Uint8Array – decode it to a string
-    const responseBody = JSON.parse(
-        Buffer.from(response.body).toString('utf-8')
-    );
-
-    const caption = responseBody?.content?.[0]?.text;
-
-    if (!caption) {
-        throw new Error('Bedrock returned an empty caption response.');
-    }
-
-    return caption.trim();
+    const body = JSON.parse(Buffer.from(response.body).toString('utf-8'));
+    const text = body?.content?.[0]?.text;
+    if (!text) throw new Error(`Claude (${modelId}) returned an empty response.`);
+    return text;
 }
 
-/**
- * Generate an image using Stability AI (SDXL) on Amazon Bedrock.
- *
- * @param {string} prompt - The fully-formed image prompt
- * @returns {Promise<string>} Base-64 encoded PNG image string
- */
-async function generateImage(prompt) {
-    const modelId =
-        process.env.BEDROCK_IMAGE_MODEL_ID ||
-        'stability.stable-diffusion-xl-v1';
+// ─────────────────────────────────────────────────────────────────────────────
+// ANALYSIS — Claude 3.5 Sonnet with optional vision
+// ─────────────────────────────────────────────────────────────────────────────
+const ANALYST_SYSTEM_PROMPT = `
+You are a world-class social media content strategist and visual art director.
+Analyse the given content (text and/or image) and return a precise structured JSON object.
 
-    // SDXL request body format
-    const requestBody = {
-        text_prompts: [
-            { text: prompt, weight: 1 },
-        ],
-        cfg_scale: 10,
-        steps: 50,
-        width: 1024,
-        height: 1024,
-    };
+Return ONLY valid JSON — no markdown fences, no explanation.
+
+Required keys:
+{
+  "subject": "One sentence describing the core subject",
+  "niche": "One of: technology | food | fitness | travel | fashion | business | gaming | education | art | music | lifestyle | other",
+  "mood": "One of: energetic | calm | luxurious | raw | playful | professional | dramatic | inspirational | humorous | nostalgic",
+  "aesthetic": "Brief ideal visual aesthetic (e.g. 'dark moody cinematic', 'clean minimal white')",
+  "colorRecommendation": "Specific color palette (e.g. 'deep navy and gold accents')",
+  "audience": "Who this targets (e.g. 'young tech enthusiasts aged 18-28')",
+  "keyThemes": ["theme1", "theme2", "theme3"],
+  "instagramImageConcept": "Detailed Instagram image description. Square composition.",
+  "linkedinImageConcept": "Detailed LinkedIn image description. Professional, landscape.",
+  "xImageConcept": "Detailed X/Twitter image description. Wide banner, bold, thumb-stopping."
+}
+`.trim();
+
+/**
+ * Analyse content using Claude 3.5 Sonnet (vision-capable).
+ *
+ * @param {string} content              - User's raw idea / text
+ * @param {string|null} primaryImageB64 - Base64 image (no data prefix) or null
+ * @param {string} userNiche            - Optional niche hint from UI
+ * @returns {Promise<object>} Structured analysis object
+ */
+async function generateAnalysis(content, primaryImageB64 = null, userNiche = '') {
+    // Build the user message content array
+    const userContent = [];
+
+    // Attach the uploaded image if present (Claude vision format)
+    if (primaryImageB64) {
+        userContent.push({
+            type: 'image',
+            source: {
+                type: 'base64',
+                media_type: 'image/jpeg',
+                data: primaryImageB64,
+            },
+        });
+    }
+
+    userContent.push({
+        type: 'text',
+        text: [
+            `Content/Idea: "${content}"`,
+            userNiche ? `User-selected niche: ${userNiche}` : '',
+            'Analyse this and return the JSON object.',
+        ].filter(Boolean).join('\n\n'),
+    });
+
+    const raw = await invokeClaude(ANALYSIS_MODEL, ANALYST_SYSTEM_PROMPT, userContent, {
+        max_tokens: 800,
+        temperature: 0.3,
+    });
+
+    // Strip accidental markdown fences
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAPTION — Claude 3.5 Haiku
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate a social media caption.
+ *
+ * @param {string} prompt - Fully-formed caption prompt (from promptEngineerService)
+ * @returns {Promise<string>} Caption text
+ */
+async function generateCaption(prompt) {
+    const text = await invokeClaude(CAPTION_MODEL, '', [{ type: 'text', text: prompt }], {
+        max_tokens: 512,
+        temperature: 0.75,
+    });
+    return text.trim();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMAGE — Amazon Nova Canvas
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate or edit an image using Amazon Nova Canvas.
+ *
+ * @param {string} prompt              - Rich image prompt (from promptEngineerService)
+ * @param {string} platform            - "instagram" | "linkedin" | "x"
+ * @param {string|null} primaryImageB64 - Base64 reference image for editing tasks
+ * @returns {Promise<string>} Data-URL of the generated PNG
+ */
+async function generateImage(prompt, platform = 'instagram', primaryImageB64 = null) {
+    const negativeText = 'blurry, low quality, watermark, text overlay, amateur, pixelated, ugly, deformed, cartoon, sketch';
+    const size = NOVA_CANVAS_SIZES[platform] || NOVA_CANVAS_SIZES.instagram;
+
+    let requestBody;
+
+    if (primaryImageB64) {
+        // Image-to-image: use the uploaded image as a conditioning reference
+        requestBody = {
+            taskType: 'IMAGE_VARIATION',
+            imageVariationParams: {
+                text: prompt,
+                negativeText,
+                images: [primaryImageB64],
+                similarityStrength: 0.7,  // 0 = ignore original, 1 = copy original
+            },
+            imageGenerationConfig: {
+                numberOfImages: 1,
+                width: size.width,
+                height: size.height,
+                cfgScale: 8.0,
+            },
+        };
+    } else {
+        // Text-to-image: generate from scratch
+        requestBody = {
+            taskType: 'TEXT_IMAGE',
+            textToImageParams: {
+                text: prompt,
+                negativeText,
+            },
+            imageGenerationConfig: {
+                numberOfImages: 1,
+                width: size.width,
+                height: size.height,
+                cfgScale: 8.0,
+                seed: Math.floor(Math.random() * 858993459),
+            },
+        };
+    }
 
     const command = new InvokeModelCommand({
-        modelId,
+        modelId: IMAGE_MODEL,
         contentType: 'application/json',
         accept: 'application/json',
         body: JSON.stringify(requestBody),
     });
 
     const response = await bedrockClient.send(command);
+    const responseBody = JSON.parse(Buffer.from(response.body).toString('utf-8'));
 
-    const responseBody = JSON.parse(
-        Buffer.from(response.body).toString('utf-8')
-    );
+    // Nova Canvas returns { images: ["<base64>", ...] }
+    const imageBase64 = responseBody?.images?.[0];
+    if (!imageBase64) throw new Error('Nova Canvas returned no image.');
 
-    // SDXL returns base-64 encoded image data
-    const imageBase64 = responseBody?.artifacts?.[0]?.base64;
-
-    if (!imageBase64) {
-        throw new Error('Bedrock returned an empty image response.');
-    }
-
-    // Return as a data URL so React can render it directly
     return `data:image/png;base64,${imageBase64}`;
 }
 
-module.exports = { generateCaption, generateImage };
+// ─────────────────────────────────────────────────────────────────────────────
+module.exports = { generateAnalysis, generateCaption, generateImage };

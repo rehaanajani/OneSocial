@@ -1,79 +1,65 @@
 /**
  * services/captionService.js
  *
- * Provider-agnostic caption generation.
- * Supports: "openrouter" (default), "bedrock", "mock".
- *
- * If AI_PROVIDER=mock OR the API key is missing, returns
- * realistic placeholder captions so the UI works without real creds.
+ * Caption generation via AWS Bedrock (Claude 3.5 Haiku).
+ * In mock mode, returns platform-native stub captions.
  */
 
 const { buildCaptionPrompt } = require('./promptService');
+const bedrockProvider = require('../providers/bedrockProvider');
 
-// ── Mock captions per platform ─────────────────────────────────────────────
+// ── Mock captions ──────────────────────────────────────────────────────────────
 const MOCK_CAPTIONS = {
-    instagram: `✨ Living for moments like these! Sometimes the best things in life are the ones you didn't plan for. Embrace the chaos, enjoy the ride, and never stop chasing what makes your soul happy. 🌊🔥
+    instagram: `couldn't be more unbothered rn 😌
 
-Drop a 💬 below — what's your favourite unplanned memory?
+fr though, this has been living rent free in my head. sometimes the simplest things hit different when you actually slow down and notice them. no big deal, just another tuesday
 
-#instadaily #lifestyle #goodvibes #explorepage #motivation #authentic #contentcreator #viral`,
+tap if you needed this reminder today 💙
 
-    linkedin: `The biggest lesson I've learned in my career isn't about strategy or execution — it's about clarity.
+#aesthetic #vibes #realtalk #instadaily #goodvibes #authentic #mood #weekendvibes`,
 
-When you know exactly WHY you're doing something, the HOW becomes surprisingly simple. Most teams struggle not because they lack talent, but because they lack direction.
+    linkedin: `Most people optimise for the wrong thing.
 
-Here's what changed everything for me: I started asking "what does success look like in 90 days?" before starting any project. No more busy work. No more misaligned teams.
+We spend years chasing bigger titles, more visibility, louder achievements — and somewhere in that pursuit, we forget to ask: is this actually working?
 
-Try it. The answers will surprise you.
+The teams I've seen sustain high performance share one trait: radical clarity. Not just on goals, but on *why* those goals matter. When everybody understands the north star, prioritisation becomes obvious and wasted effort disappears.
 
-What's your go-to framework for staying focused? Drop it in the comments 👇
+What's one thing your team needs more clarity on right now? 👇
 
-#leadership #productivity #professionalgrowth`,
+#leadership #strategy #futureofwork`,
 
-    x: `The secret to going viral isn't luck — it's timing, relevance, and one sentence that makes people stop scrolling. 🧵 Thread:`,
+    x: `Reminder: you're not behind. You're on a different timeline. 🌊 #perspective`,
 };
 
-// ── Stub guard ─────────────────────────────────────────────────────────────
 function isMockMode() {
     const provider = (process.env.AI_PROVIDER || '').toLowerCase();
-    const hasKey = !!process.env.OPENROUTER_API_KEY || !!process.env.AWS_ACCESS_KEY_ID;
+    const hasKey = !!process.env.AWS_ACCESS_KEY_ID;
     return provider === 'mock' || !hasKey;
 }
 
-// ── Provider loader ────────────────────────────────────────────────────────
-function getProvider() {
-    const provider = (process.env.AI_PROVIDER || 'openrouter').toLowerCase();
-    if (provider === 'bedrock') return require('../providers/bedrockProvider');
-    return require('../providers/openrouterProvider');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
 /**
- * Generate a platform-specific caption for the given content.
+ * Generate a platform-specific caption.
  *
- * @param {string} platform    - "instagram" | "linkedin" | "x"
- * @param {string} content     - Raw topic or idea from the request
- * @param {object} options     - { vibe, accountType, context }
- * @param {string} [manualCaption] - If provided, skip AI and return this directly
+ * @param {string} platform        - "instagram" | "linkedin" | "x"
+ * @param {string} content         - Raw topic or idea
+ * @param {object} options         - { vibe, accountType, context, engineeredPrompt }
+ * @param {string} [manualCaption] - If provided, skip AI and return directly
  * @returns {Promise<string>} Caption text
  */
 async function generateCaption(platform, content, options = {}, manualCaption = null) {
-    // If user wrote their own caption — use it as-is
-    if (manualCaption && manualCaption.trim()) {
-        return manualCaption.trim();
-    }
+    if (manualCaption && manualCaption.trim()) return manualCaption.trim();
 
-    // Mock mode — no real API call
     if (isMockMode()) {
-        console.log(`[captionService] MOCK mode — returning stub caption for ${platform}`);
-        await new Promise((r) => setTimeout(r, 400)); // simulate latency
+        console.log(`[captionService] MOCK — stub caption for ${platform}`);
+        await new Promise((r) => setTimeout(r, 400));
         return MOCK_CAPTIONS[platform] || MOCK_CAPTIONS.instagram;
     }
 
-    const prompt = buildCaptionPrompt(platform, content, options);
-    const provider = getProvider();
-    return provider.generateCaption(prompt);
+    const { engineeredPrompt, vibe, accountType, context } = options;
+    const prompt = engineeredPrompt || buildCaptionPrompt(platform, content, { vibe, accountType, context });
+
+    console.log(`[captionService] Claude 3.5 Haiku — ${platform} (${engineeredPrompt ? 'engineered' : 'legacy'} prompt)`);
+    return bedrockProvider.generateCaption(prompt);
 }
 
 module.exports = { generateCaption };
