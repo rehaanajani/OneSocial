@@ -68,7 +68,7 @@ app.use(express.json({ limit: "10mb" }));
 
 // ── Routes ────────────────────────────────────────────────────────────────
 
-app.get("/health", (_req, res) => {
+app.get("/api/health", (_req, res) => {
     res.status(200).json({
         status: "ok",
         provider: process.env.AI_PROVIDER || "openrouter",
@@ -78,8 +78,7 @@ app.get("/health", (_req, res) => {
 });
 
 // Apply rate limiter only to the generate endpoint (not health checks)
-// Note: In Vercel, api/generate.js handles `/api/generate`, so the internal path is just `/`
-app.use("/", rateLimiter, generateRoute);
+app.use("/api/generate", rateLimiter, generateRoute);
 
 // ── 404 Handler ───────────────────────────────────────────────────────────
 
