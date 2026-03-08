@@ -97,15 +97,18 @@ app.use((err, _req, res, _next) => {
     });
 });
 
-// ── Start Server ──────────────────────────────────────────────────────────
+// ── Start Server (Local only) ───────────────────────────────────────────────
 
-app.listen(PORT, () => {
-    console.log("\n🚀 OneSocial Backend running");
-    console.log(`   Server      : http://localhost:${PORT}`);
-    console.log(`   Provider    : ${(process.env.AI_PROVIDER || "openrouter").toUpperCase()}`);
-    console.log(`   Rate limit  : ${RATE_LIMIT_MAX} req/min per IP`);
-    console.log(`   Health check: http://localhost:${PORT}/health`);
-    console.log(`   Generate    : POST http://localhost:${PORT}/api/generate\n`);
-});
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log("\n🚀 OneSocial Backend running");
+        console.log(`   Server      : http://localhost:${PORT}`);
+        console.log(`   Provider    : ${(process.env.AI_PROVIDER || "openrouter").toUpperCase()}`);
+        console.log(`   Rate limit  : ${RATE_LIMIT_MAX} req/min per IP`);
+        console.log(`   Health check: http://localhost:${PORT}/health`);
+        console.log(`   Generate    : POST http://localhost:${PORT}/api/generate\n`);
+    });
+}
 
+// Export for Vercel Serverless
 module.exports = app;
